@@ -1,0 +1,14 @@
+{
+  "name": "bibi-dca",
+  "version": "1.3.0",
+  "private": true,
+  "type": "module",
+  "description": "Пополнение портфеля по заданным инвестором долям",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node server.mjs",
+    "workspace": "node workspace-server.mjs",
+    "build": "node scripts/build.mjs",
+    "test": "node --test"
+  }
+}

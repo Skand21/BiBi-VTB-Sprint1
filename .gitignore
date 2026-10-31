@@ -1,0 +1,14 @@
+node_modules/
+qa/
+*.zip
+var/
+releases/
+.env
+.env.*
+*.pem
+*.key
+.ssh/
+__pycache__/
+*.pyc
+*.log
+dist/*-v1.0.webm

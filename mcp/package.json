@@ -1,0 +1,11 @@
+{
+  "name": "bibi-mcp",
+  "version": "1.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local portfolio workspace, market quotes and contribution calculations for BiBi",
+  "engines": { "node": ">=20" },
+  "scripts": { "start": "node server.mjs", "test": "node --test check.mjs workspace-check.mjs", "demo": "node demo.mjs" },
+  "dependencies": { "@modelcontextprotocol/server": "2.3.1", "zod": "4.6.7" },
+  "devDependencies": { "@modelcontextprotocol/client": "2.3.1" }
+}

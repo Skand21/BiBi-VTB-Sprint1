@@ -1,0 +1,44 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtemp,rm} from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import {fileURLToPath} from 'node:url';
+import {Client} from '@modelcontextprotocol/client';
+import {StdioClientTransport} from '@modelcontextprotocol/client/stdio';
+import {demoPlan} from '../src/state.mjs';
+const fixture=fileURLToPath(new URL('workspace-fixture.mjs',import.meta.url));
+async function clientFor(t,dir){
+ const transport=new StdioClientTransport({command:process.execPath,args:[fixture],env:{...process.env,BIBI_WORKSPACE_DIR:dir},stderr:'pipe',maxBufferSize:65536});let stderr='';transport.stderr.on('data',b=>stderr+=b);
+ const client=new Client({name:'bibi-workspace-test',version:'1.0.0'});await client.connect(transport);t.after(async()=>{await client.close();assert.equal(stderr,'');});return client;
+}
+test('MCP saved workspace covers quotes, persistence, real/demo separation, history and repeated contribution',{timeout:25000},async t=>{
+ const dir=await mkdtemp(path.join(os.tmpdir(),'bibi-mcp-workspace-'));t.after(async()=>{if(!path.resolve(dir).startsWith(path.join(path.resolve(os.tmpdir()),'bibi-mcp-workspace-')))throw Error('Unexpected cleanup path');await rm(dir,{recursive:true,force:true});});
+ const client=await clientFor(t,dir);const call=async(name,args={})=>{const r=await client.callTool({name,arguments:args});assert.ok(!r.isError,JSON.stringify(r));return r.structuredContent;};
+ const tools=(await client.listTools()).tools;assert.equal(tools.length,14);assert.equal(tools.find(t=>t.name==='bibi_update_portfolio').annotations.readOnlyHint,false);assert.equal(tools.find(t=>t.name==='bibi_get_quote').annotations.openWorldHint,true);
+ assert.equal((await call('bibi_list_portfolios')).portfolios.length,0);
+ assert.equal((await call('bibi_search_securities',{query:'Сбер'})).items[0].ticker,'SBER');assert.equal((await call('bibi_get_quote',{ticker:'SBER'})).quote.price,1000);
+ const real=await call('bibi_create_portfolio',{plan:demoPlan(),mode:'personal'});
+ assert.equal(real.plan.assets[1].quantity,'30');assert.ok(!('state' in real));
+ const update=await call('bibi_update_portfolio',{portfolioId:real.id,expectedRevision:real.revision,plan:{...real.plan,name:'User-chosen saved plan'}});
+ const preview=await call('bibi_refresh_quotes',{portfolioId:real.id,expectedRevision:update.revision});assert.equal(preview.previewOnly,true);assert.equal((await call('bibi_get_portfolio',{portfolioId:real.id})).revision,update.revision);
+ const refreshed=await call('bibi_apply_quotes',{portfolioId:real.id,expectedRevision:update.revision,refreshId:preview.refreshId});assert.equal(refreshed.quotes.length,2);assert.equal(refreshed.portfolio.plan.assets[1].quantity,'30');
+ const repeat=await client.callTool({name:'bibi_apply_quotes',arguments:{portfolioId:real.id,expectedRevision:refreshed.portfolio.revision,refreshId:preview.refreshId}});assert.equal(repeat.isError,true);
+ const staged=await call('bibi_refresh_quotes',{portfolioId:real.id,expectedRevision:refreshed.portfolio.revision});
+ const forged=await client.callTool({name:'bibi_apply_quotes',arguments:{portfolioId:real.id,expectedRevision:refreshed.portfolio.revision,refreshId:'00000000-0000-4000-8000-000000000000'}});assert.equal(forged.isError,true);
+ const first=await call('bibi_calculate_saved',{portfolioId:real.id,expectedRevision:refreshed.portfolio.revision,contribution:'20000'});assert.equal(first.calculation.result.cash,99050);assert.equal(first.portfolio.plan.assets[1].quantity,'30');
+ const staleBatch=await client.callTool({name:'bibi_apply_quotes',arguments:{portfolioId:real.id,expectedRevision:staged.expectedRevision,refreshId:staged.refreshId}});assert.equal(staleBatch.isError,true);assert.ok(staleBatch.content[0].text.includes('CONFLICT'));
+ const forbidden=await client.callTool({name:'bibi_simulate_calculation',arguments:{portfolioId:real.id,expectedRevision:first.portfolio.revision,calculationId:first.calculation.id}});assert.equal(forbidden.isError,true);assert.ok(forbidden.content[0].text.includes('SIMULATION_ONLY'));
+ const model=await call('bibi_create_simulation',{portfolioId:real.id,expectedRevision:first.portfolio.revision});
+ const a=await call('bibi_calculate_saved',{portfolioId:model.id,expectedRevision:model.revision,contribution:'20000'});
+ const applied=await call('bibi_simulate_calculation',{portfolioId:model.id,expectedRevision:a.portfolio.revision,calculationId:a.calculation.id});assert.equal(applied.plan.assets[1].quantity,'49');
+ const twice=await client.callTool({name:'bibi_simulate_calculation',arguments:{portfolioId:model.id,expectedRevision:applied.revision,calculationId:a.calculation.id}});assert.equal(twice.isError,true);
+ const b=await call('bibi_calculate_saved',{portfolioId:model.id,expectedRevision:applied.revision,contribution:'20000'});assert.equal(b.calculation.result.cash,98050);assert.equal(b.portfolio.history.length,2);
+ await call('bibi_select_portfolio',{portfolioId:model.id});const selected=await call('bibi_get_portfolio');assert.equal(selected.id,model.id);
+ const secondClient=await clientFor(t,dir);const persisted=await secondClient.callTool({name:'bibi_get_portfolio',arguments:{portfolioId:model.id}});assert.equal(persisted.structuredContent.plan.assets[1].quantity,'49');
+ const original=await call('bibi_get_portfolio',{portfolioId:real.id});assert.equal(original.plan.assets[1].quantity,'30');assert.equal(original.plan.cash,'0');
+ const stale=await client.callTool({name:'bibi_update_portfolio',arguments:{portfolioId:real.id,expectedRevision:1,plan:real.plan}});assert.equal(stale.isError,true);assert.ok(stale.content[0].text.includes('CONFLICT'));
+ const before=JSON.stringify(await call('bibi_get_portfolio',{portfolioId:real.id}));
+ const extra=await client.callTool({name:'bibi_get_portfolio',arguments:{portfolioId:real.id,path:'/etc/passwd'}});assert.equal(extra.isError,true);
+ assert.equal(JSON.stringify(await call('bibi_get_portfolio',{portfolioId:real.id})),before);
+});

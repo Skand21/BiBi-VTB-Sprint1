@@ -1,0 +1,16 @@
+dist
+tests
+qa
+*.md
+.git
+node_modules
+**/node_modules
+quality
+docs
+releases
+var
+.env
+.env.*
+*.pem
+*.key
+*.zip
